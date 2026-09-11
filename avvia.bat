@@ -1,9 +1,19 @@
 @echo off
-setlocal EnableExtensions
-title MIDI StreamDeck - Setup e Avvio
+:: Rilevamento privilegi di amministratore
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Richiesta dei privilegi di amministratore...
+    powershell -Command "Start-Process cmd -ArgumentList '/c \"\"%~f0\"\"' -Verb RunAs"
+    exit /b
+)
+
+:: Riporta la directory di lavoro a quella del file .bat
+cd /d "%~dp0"
+
+title MIDI SkipeDeck - Setup e Avvio
 
 echo ========================================
-echo    MIDI StreamDeck - Setup e Avvio
+echo    MIDI SkipeDeck - Setup e Avvio
 echo ========================================
 echo.
 
@@ -18,10 +28,8 @@ if errorlevel 1 (
     echo.
     echo Download di Python 3.12.0...
 
-    set "PYTHON_INSTALLER=%TEMP%\python-3.12.0-installer.exe"
-
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe' -OutFile '%PYTHON_INSTALLER%'"
+        "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe' -OutFile '%TEMP%\python-3.12.0-installer.exe'"
 
     if errorlevel 1 (
         echo.
@@ -35,7 +43,7 @@ if errorlevel 1 (
     echo Installazione di Python 3.12.0...
     echo.
 
-    "%PYTHON_INSTALLER%" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+    "%TEMP%\python-3.12.0-installer.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1 InstallLauncherAllUsers=1
 
     if errorlevel 1 (
         echo.
@@ -51,7 +59,7 @@ if errorlevel 1 (
     set "PATH=%ProgramFiles%\Python312;%ProgramFiles%\Python312\Scripts;%PATH%"
 
     :: Rimuove installer temporaneo
-    del /f /q "%PYTHON_INSTALLER%" >nul 2>&1
+    del /f /q "%TEMP%\python-3.12.0-installer.exe" >nul 2>&1
 )
 
 :: ========================================
@@ -106,11 +114,55 @@ echo [OK] Dipendenze installate correttamente.
 echo.
 
 :: ========================================
-:: AVVIO MIDI STREAMDECK
+:: CREAZIONE ICONA SUL DESKTOP
 :: ========================================
 
+echo Creazione icona sul desktop...
+
+set "ICONA=%~dp0skipedeck.ico"
+set "SCRIPT=%~dp0midi_streamdeck.py"
+set "LINK=%USERPROFILE%\Desktop\MIDI SkipeDeck.lnk"
+
+:: Trova pythonw.exe (versione senza console)
+set "PYTHONW="
+for /f "delims=" %%i in ('where pythonw 2^>nul') do (
+    if not defined PYTHONW set "PYTHONW=%%i"
+)
+
+:: Se non trovato, prova nel path standard di Python 3.12
+if not defined PYTHONW (
+    if exist "%ProgramFiles%\Python312\pythonw.exe" (
+        set "PYTHONW=%ProgramFiles%\Python312\pythonw.exe"
+    )
+)
+
+if not defined PYTHONW (
+    echo [WARN] pythonw.exe non trovato, salto la creazione dell'icona.
+    goto :avvio
+)
+
+if not exist "%ICONA%" (
+    echo [WARN] File icona non trovato: %ICONA%
+    echo        L'icona usera' quella di default di Python.
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut('%LINK%'); $sc.TargetPath = '%PYTHONW%'; $sc.Arguments = '\"%SCRIPT%\"'; $sc.WorkingDirectory = '%~dp0'; if (Test-Path '%ICONA%') { $sc.IconLocation = '%ICONA%' }; $sc.Description = 'MIDI SkipeDeck'; $sc.Save()"
+
+if exist "%LINK%" (
+    echo [OK] Icona creata sul desktop: MIDI SkipeDeck
+) else (
+    echo [WARN] Impossibile creare l'icona sul desktop.
+)
+
+:avvio
+
+:: ========================================
+:: AVVIO MIDI SKIPEDECK
+:: ========================================
+
+echo.
 echo ========================================
-echo       AVVIO MIDI STREAMDECK
+echo       AVVIO MIDI SKIPEDECK
 echo ========================================
 echo.
 
@@ -118,7 +170,7 @@ python midi_streamdeck.py
 
 echo.
 echo ========================================
-echo       MIDI StreamDeck terminato
+echo       MIDI SkipeDeck terminato
 echo ========================================
 echo.
 
