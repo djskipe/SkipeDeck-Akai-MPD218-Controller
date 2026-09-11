@@ -114,12 +114,36 @@ echo [OK] Dipendenze installate correttamente.
 echo.
 
 :: ========================================
+:: CONVERSIONE PNG -> ICO MULTI-RISOLUZIONE
+:: ========================================
+
+set "PNG=%~dp0skipedeck.png"
+set "ICONA=%~dp0skipedeck.ico"
+
+if exist "%PNG%" (
+    echo Conversione icona PNG -^> ICO multi-risoluzione...
+
+    python -c "from PIL import Image; img = Image.open(r'%PNG%'); img.save(r'%ICONA%', format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+    if errorlevel 1 (
+        echo [WARN] Conversione icona fallita, uso icona di default.
+    ) else (
+        echo [OK] Icona multi-risoluzione creata.
+    )
+) else (
+    if exist "%ICONA%" (
+        echo [INFO] PNG non trovato, uso il file ICO esistente.
+    ) else (
+        echo [WARN] Ne' PNG ne' ICO trovati, icona di default.
+    )
+)
+
+:: ========================================
 :: CREAZIONE ICONA SUL DESKTOP
 :: ========================================
 
 echo Creazione icona sul desktop...
 
-set "ICONA=%~dp0skipedeck.ico"
 set "SCRIPT=%~dp0midi_streamdeck.py"
 set "LINK=%USERPROFILE%\Desktop\MIDI SkipeDeck.lnk"
 
