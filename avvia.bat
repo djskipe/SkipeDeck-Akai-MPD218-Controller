@@ -90,6 +90,7 @@ echo Installazione dipendenze:
 echo - pygame
 echo - pyautogui
 echo - pillow
+echo - keyboard
 echo.
 
 python -m pip install --upgrade pip --quiet
@@ -100,7 +101,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -m pip install pygame pyautogui pillow --quiet
+python -m pip install pygame pyautogui pillow pynput --quiet
 
 if errorlevel 1 (
     echo.

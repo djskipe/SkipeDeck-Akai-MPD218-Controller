@@ -23,6 +23,12 @@ try:
 except ImportError:
     AUTO_OK = False
 
+try:
+    from pynput import keyboard as pynput_kb
+    PYNPUT_OK = True
+except ImportError:
+    PYNPUT_OK = False
+
 import ctypes as _ctypes, sys as _sys, time as _time_mod
 
 _VK = {
@@ -35,13 +41,49 @@ _VK = {
     'f1':0x70,'f2':0x71,'f3':0x72,'f4':0x73,'f5':0x74,'f6':0x75,
     'f7':0x76,'f8':0x77,'f9':0x78,'f10':0x79,'f11':0x7A,'f12':0x7B,
     'f13':0x7C,'f14':0x7D,'f15':0x7E,'f16':0x7F,
+    'f17':0x80,'f18':0x81,'f19':0x82,'f20':0x83,
+    'f21':0x84,'f22':0x85,'f23':0x86,'f24':0x87,
     'pause':0x13,'break':0x03,'cancel':0x03,
     'printscreen':0x2C,'scrolllock':0x91,'numlock':0x90,'capslock':0x14,
     'playpause':0xB3,'nexttrack':0xB0,'prevtrack':0xB1,
     'volumeup':0xAF,'volumedown':0xAE,'mute':0xAD,
+    'media_stop':0xB2, 'browser_home':0xAC,
+    'launch_mail':0xB4, 'launch_media':0xB5,
+    'menu':0x5D,
 }
 for _c in 'abcdefghijklmnopqrstuvwxyz': _VK[_c] = ord(_c.upper())
 for _d in '0123456789':                 _VK[_d] = ord(_d)
+
+# Numpad
+_VK['numpad0'] = 0x60
+_VK['numpad1'] = 0x61
+_VK['numpad2'] = 0x62
+_VK['numpad3'] = 0x63
+_VK['numpad4'] = 0x64
+_VK['numpad5'] = 0x65
+_VK['numpad6'] = 0x66
+_VK['numpad7'] = 0x67
+_VK['numpad8'] = 0x68
+_VK['numpad9'] = 0x69
+_VK['numpad/'] = 0x6F
+_VK['numpad*'] = 0x6A
+_VK['numpad-'] = 0x6D
+_VK['numpad+'] = 0x6B
+_VK['numpad.'] = 0x6E
+_VK['numpadenter'] = 0x0D
+
+# Simboli
+_VK['/']  = 0xBF
+_VK['\\'] = 0xDC
+_VK[';']  = 0xBA
+_VK["'"]  = 0xDE
+_VK['[']  = 0xDB
+_VK[']']  = 0xDD
+_VK[',']  = 0xBC
+_VK['.']  = 0xBE
+_VK['-']  = 0xBD
+_VK['=']  = 0xBB
+_VK['`']  = 0xC0
 
 def _press_hotkey(combo: str, repeats=1):
     keys = [k.strip().lower() for k in combo.split('+') if k.strip()]
@@ -98,12 +140,12 @@ MODELS = {
         "image": "mpd218_inverted.png",
         "crop": None,
         "knob_coords": {
-            "k0": (47, 256, 77, 286),
-            "k1": (124, 259, 154, 289),
-            "k2": (47, 166, 77, 196),
-            "k3": (124, 166, 154, 196),
-            "k4": (48, 74, 79, 108),
-            "k5": (124, 74, 154, 104),
+            "k0": (30, 245, 60, 275),
+            "k1": (111, 245, 141, 275),
+            "k2": (27, 162, 57, 192),
+            "k3": (111, 162, 141, 192),
+            "k4": (32, 78, 63, 112),
+            "k5": (114, 82, 144, 112),
         },
     },
     "standard": {
@@ -111,12 +153,12 @@ MODELS = {
         "image": "mpd218_standard.png",
         "crop": None,
         "knob_coords": {
-            "k4": (48, 74, 79, 108),
-            "k5": (124, 74, 154, 104),
-            "k2": (47, 166, 77, 196),
-            "k3": (124, 166, 154, 196),
-            "k0": (47, 256, 77, 286),
-            "k1": (124, 259, 154, 289),
+            "k4": (80, 94, 110, 128),
+            "k5": (145, 96, 175, 126),
+            "k2": (83, 171, 113, 201),
+            "k3": (145, 173, 175, 203),
+            "k0": (81, 248, 111, 278),
+            "k1": (144, 245, 174, 275),
         },
     },
 }
@@ -138,7 +180,6 @@ COLORS = {
 
 # ══════════════════════════════════════════════════════════════════════════════
 def load_model_image(model_data):
-    """Carica l'immagine del modello, applica crop se definito, ridimensiona a 550x450."""
     img = Image.open(BASE_DIR / model_data["image"])
     if model_data.get("crop"):
         img = img.crop(model_data["crop"])
@@ -147,7 +188,6 @@ def load_model_image(model_data):
 
 
 def load_coords_for_model(model_name):
-    """Carica coordinate pad e knob specifiche per il modello."""
     pad_file = BASE_DIR / f"pad_coordinates_{model_name}.json"
     knob_file = BASE_DIR / f"knob_coordinates_{model_name}.json"
     
@@ -170,7 +210,6 @@ def load_coords_for_model(model_name):
 
 # ══════════════════════════════════════════════════════════════════════════════
 class ModelChooser(tk.Toplevel):
-    """Popup per scegliere il modello MPD218 al primo avvio."""
     def __init__(self, parent, current="inverted"):
         super().__init__(parent)
         self.title("Seleziona il tuo MPD218")
@@ -228,13 +267,7 @@ class ModelChooser(tk.Toplevel):
 
 # ══════════════════════════════════════════════════════════════════════════════
 class KeyRecorder(tk.Toplevel):
-    KEYMAP = {
-        'Control_L':'ctrl','Control_R':'ctrl','Shift_L':'shift','Shift_R':'shift',
-        'Alt_L':'alt','Alt_R':'alt','Super_L':'win','Super_R':'win','Return':'enter',
-        'BackSpace':'backspace','Tab':'tab','Escape':'esc','space':'space','Delete':'delete',
-        'Insert':'insert','Home':'home','End':'end','Prior':'pageup','Next':'pagedown',
-        'Left':'left','Right':'right','Up':'up','Down':'down','F1':'f1','F2':'f2'
-    }
+    """Registratore di scorciatoie usando 'pynput' (cattura TUTTI i tasti)."""
     def __init__(self, parent, current=""):
         super().__init__(parent)
         self.title("Registra Scorciatoia")
@@ -243,43 +276,184 @@ class KeyRecorder(tk.Toplevel):
         self.grab_set()
         self.transient(parent)
         self.result = None
-        self.keys = [k.strip() for k in current.split('+') if k.strip()] if current else []
-        tk.Label(self, text="Premi i tasti sulla tastiera...", fg="white", bg="#1c1c24", pady=8).pack()
-        self._lbl = tk.Label(self, text="", fg="#58d68d", bg="#0a0a0a", font=("",11,"bold"), padx=20, pady=10, width=25)
+        self.keys = []
+        self._recording = True
+        self._listener = None
+
+        tk.Label(self, text="Premi la combinazione di tasti desiderata...",
+                 fg="white", bg="#1c1c24", font=("",11), pady=8).pack()
+        
+        self._lbl = tk.Label(self, text="In attesa...", fg="#666", bg="#0a0a0a",
+                              font=("Consolas",14,"bold"), padx=20, pady=15, width=30)
         self._lbl.pack(padx=10, pady=5)
+        
+        self._hint = tk.Label(self, text="ESC per annullare · INVIO per confermare",
+                               fg="#888", bg="#1c1c24", font=("",8))
+        self._hint.pack()
+
         f = tk.Frame(self, bg="#1c1c24")
         f.pack(fill="x", padx=10, pady=10)
-        tk.Button(f, text="Cancella", command=self._clear, bg="#444", fg="white", bd=0, padx=6).pack(side="left")
-        tk.Button(f, text="OK", command=self._ok, bg="#2a6eba", fg="white", bd=0, padx=12, font=("",9,"bold")).pack(side="right")
-        self._update()
-        self.bind("<KeyPress>", self._on_press)
+        tk.Button(f, text="Cancella", command=self._clear, bg="#444", fg="white", bd=0, padx=10, pady=4).pack(side="left")
+        tk.Button(f, text="✅ OK", command=self._ok, bg="#2a6eba", fg="white", bd=0, padx=20, pady=4, font=("",9,"bold")).pack(side="right")
+
         self.geometry(f"+{parent.winfo_x()+150}+{parent.winfo_y()+150}")
 
-    def _on_press(self, e):
-        if e.keysym in ('Return', 'KP_Enter') and self.keys:
-            self._ok()
+        if PYNPUT_OK:
+            self.after(150, self._start_listener)
+        else:
+            self._lbl.config(text="Libreria 'pynput' non installata!", fg="#e74c3c")
+            self._hint.config(text="Esegui: pip install pynput")
+
+    def _start_listener(self):
+        from pynput import keyboard as pk
+
+        def on_press(key):
+            if not self._recording:
+                return False
+            
+            try:
+                # ── PRIMA controlla il codice VK per distinguere numpad ──
+                vk = getattr(key, 'vk', None)
+                if vk is not None:
+                    # Numpad numeri (0x60 - 0x69)
+                    if 0x60 <= vk <= 0x69:
+                        numpad_num = vk - 0x60
+                        self._add_key(f'numpad{numpad_num}')
+                        return
+                    # Numpad operatori
+                    elif vk == 0x6F:
+                        self._add_key('numpad/'); return
+                    elif vk == 0x6A:
+                        self._add_key('numpad*'); return
+                    elif vk == 0x6D:
+                        self._add_key('numpad-'); return
+                    elif vk == 0x6B:
+                        self._add_key('numpad+'); return
+                    elif vk == 0x6E:
+                        self._add_key('numpad.'); return
+                
+                # ── Modificatori ──
+                if key in (pk.Key.ctrl_l, pk.Key.ctrl_r, pk.Key.ctrl):
+                    self._add_key('ctrl')
+                elif key in (pk.Key.shift_l, pk.Key.shift_r, pk.Key.shift):
+                    self._add_key('shift')
+                elif key in (pk.Key.alt_l, pk.Key.alt_r, pk.Key.alt, pk.Key.alt_gr):
+                    self._add_key('alt')
+                elif key in (pk.Key.cmd, pk.Key.cmd_l, pk.Key.cmd_r):
+                    self._add_key('win')
+                
+                # ── Tasti di controllo ──
+                elif key == pk.Key.esc:
+                    self.after(0, self._cancel)
+                    return False
+                elif key == pk.Key.enter:
+                    self.after(0, self._ok)
+                    return False
+                elif key == pk.Key.space:
+                    self._add_key('space')
+                elif key == pk.Key.tab:
+                    self._add_key('tab')
+                elif key == pk.Key.backspace:
+                    self._add_key('backspace')
+                elif key == pk.Key.delete:
+                    self._add_key('delete')
+                elif key == pk.Key.insert:
+                    self._add_key('insert')
+                elif key == pk.Key.home:
+                    self._add_key('home')
+                elif key == pk.Key.end:
+                    self._add_key('end')
+                elif key == pk.Key.page_up:
+                    self._add_key('pageup')
+                elif key == pk.Key.page_down:
+                    self._add_key('pagedown')
+                elif key == pk.Key.up:
+                    self._add_key('up')
+                elif key == pk.Key.down:
+                    self._add_key('down')
+                elif key == pk.Key.left:
+                    self._add_key('left')
+                elif key == pk.Key.right:
+                    self._add_key('right')
+                elif key == pk.Key.caps_lock:
+                    self._add_key('capslock')
+                elif key == pk.Key.num_lock:
+                    self._add_key('numlock')
+                elif key == pk.Key.scroll_lock:
+                    self._add_key('scrolllock')
+                elif key == pk.Key.print_screen:
+                    self._add_key('printscreen')
+                elif key == pk.Key.pause:
+                    self._add_key('pause')
+                elif key == pk.Key.menu:
+                    self._add_key('menu')
+                
+                # ── Tasti funzione F1-F24 ──
+                elif hasattr(pk.Key, 'f1'):
+                    matched = False
+                    for i in range(1, 25):
+                        fkey = getattr(pk.Key, f'f{i}', None)
+                        if fkey is not None and key == fkey:
+                            self._add_key(f'f{i}')
+                            matched = True
+                            break
+                    if not matched and hasattr(key, 'char') and key.char:
+                        self._add_key(key.char.lower())
+                
+                # ── Caratteri normali ──
+                elif hasattr(key, 'char') and key.char:
+                    self._add_key(key.char.lower())
+            
+            except Exception as e:
+                print(f"KeyRecorder error: {e}")
+
+        def on_release(key):
+            if not self._recording:
+                return False
+
+        self._listener = pk.Listener(on_press=on_press, on_release=on_release)
+        self._listener.daemon = True
+        self._listener.start()
+
+    def _add_key(self, name):
+        if not name:
             return
-        if e.keysym == 'Escape':
-            if self.keys:
-                self.keys.pop()
-                self._update()
-            else:
-                self.destroy()
+        if name in self.keys:
             return
-        k = self.KEYMAP.get(e.keysym, e.keysym.lower() if len(e.keysym)==1 else None)
-        if k and k not in self.keys:
-            self.keys.append(k)
-            self._update()
+        if name in ('ctrl', 'shift', 'alt', 'win'):
+            self.keys.insert(0, name)
+        else:
+            self.keys.append(name)
+        self.after(0, self._update_display)
+
+    def _update_display(self):
+        if self.keys:
+            self._lbl.config(text=" + ".join(k.upper() for k in self.keys), fg="#58d68d")
+        else:
+            self._lbl.config(text="In attesa...", fg="#666")
 
     def _clear(self):
         self.keys = []
-        self._update()
-
-    def _update(self):
-        self._lbl.config(text=" + ".join(self.keys).upper() if self.keys else "VUOTO")
+        self._update_display()
 
     def _ok(self):
+        if not self.keys:
+            return
+        self._recording = False
         self.result = "+".join(self.keys)
+        self._close()
+
+    def _cancel(self):
+        self._recording = False
+        self.result = None
+        self._close()
+
+    def _close(self):
+        try:
+            if self._listener is not None:
+                self._listener.stop()
+        except:
+            pass
         self.destroy()
 
     @classmethod
@@ -287,8 +461,7 @@ class KeyRecorder(tk.Toplevel):
         d = cls(parent, current)
         parent.wait_window(d)
         return d.result
-
-
+        
 # ══════════════════════════════════════════════════════════════════════════════
 class App:
     def __init__(self, root):
@@ -328,7 +501,6 @@ class App:
         self.knob_handles = {}
         self._knob_timer_ids = {}
         
-        # Modello MPD218
         self.current_model = "inverted"
         if MODEL_FILE.exists():
             saved = MODEL_FILE.read_text().strip()
@@ -346,7 +518,7 @@ class App:
         self._load_knob_cc_map()
         self._ui()
         self._start_midi()
-        
+
     def _on_closing(self):
         self.running = False
         if self.midi_thread and self.midi_thread.is_alive():
@@ -494,7 +666,6 @@ class App:
         messagebox.showinfo("Pulsanti non supportati", info_text)
 
     def _on_model_change(self, event=None):
-        """Cambia modello MPD218, ricarica immagine + coordinate + profilo associato."""
         selected_name = self._model_var.get()
         for key, data in MODELS.items():
             if data["name"] == selected_name:
@@ -502,15 +673,12 @@ class App:
                 break
         MODEL_FILE.write_text(self.current_model)
         
-        # Associa profilo al modello (stesso nome)
         if self.current_model in self.profiles and self.current_model != self.current_profile:
             self._switch_profile(self.current_model)
             self._refresh_profile_combo()
         
-        # Ricarica coordinate specifiche per il modello
         self.coordinates, self.knob_coordinates = load_coords_for_model(self.current_model)
         
-        # Ricarica immagine
         try:
             model_data = MODELS[self.current_model]
             img = load_model_image(model_data)
@@ -847,26 +1015,17 @@ class App:
         dx = event.x - self.cal_drag_start[0]
         dy = event.y - self.cal_drag_start[1]
         if self.cal_drag_mode == 'move':
-            x1 += dx
-            x2 += dx
-            y1 += dy
-            y2 += dy
+            x1 += dx; x2 += dx; y1 += dy; y2 += dy
         elif self.cal_drag_mode == 'resize_nw':
-            x1 += dx
-            y1 += dy
+            x1 += dx; y1 += dy
         elif self.cal_drag_mode == 'resize_ne':
-            x2 += dx
-            y1 += dy
+            x2 += dx; y1 += dy
         elif self.cal_drag_mode == 'resize_sw':
-            x1 += dx
-            y2 += dy
+            x1 += dx; y2 += dy
         elif self.cal_drag_mode == 'resize_se':
-            x2 += dx
-            y2 += dy
-        if x2 - x1 < 15:
-            x2 = x1 + 15
-        if y2 - y1 < 15:
-            y2 = y1 + 15
+            x2 += dx; y2 += dy
+        if x2 - x1 < 15: x2 = x1 + 15
+        if y2 - y1 < 15: y2 = y1 + 15
         coords_dict[self.cal_drag_pad] = (x1, y1, x2, y2)
         self.cal_drag_start = (event.x, event.y)
         self._draw_calibration_rects()
@@ -895,9 +1054,7 @@ class App:
     def _flash_knob_on(self, key, value=None):
         if key in self.knob_coordinates and key not in self.active_knob_leds:
             x1, y1, x2, y2 = self.knob_coordinates[key]
-            cx = (x1+x2)/2
-            cy = (y1+y2)/2
-            r = (x2-x1)/2
+            cx = (x1+x2)/2; cy = (y1+y2)/2; r = (x2-x1)/2
             glow1 = self.canvas.create_oval(cx-r-4, cy-r-4, cx+r+4, cy+r+4,
                 outline="#00ffff", width=3, tags=f"knob_led_{key}")
             fill = self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r,
@@ -942,8 +1099,7 @@ class App:
         self._ok_btn.config(state="normal")
         self._del_btn.config(state="normal")
         self._learn_btn.config(state="normal")
-        if old:
-            self._refresh_btn(old)
+        if old: self._refresh_btn(old)
         self._refresh_btn(key)
 
     def _on_action(self, *_):
@@ -1089,10 +1245,8 @@ class App:
                     last_val = self.knob_vals.get(k, d2)
                     self.knob_vals[k] = d2
                     delta = d2 - last_val
-                    if d2 == 127:
-                        delta = 4
-                    elif d2 == 0:
-                        delta = -4
+                    if d2 == 127: delta = 4
+                    elif d2 == 0: delta = -4
                     if delta != 0:
                         self._exec_knob(k, delta, max(1, min(10, abs(delta))))
 
@@ -1108,10 +1262,8 @@ class App:
             if action in ("Shortcut tastiera", "Discord: muto/unmuto", "Discord: deafen/undeafen"):
                 _press_hotkey(value)
             elif action == "Apri applicazione":
-                if sys.platform == "win32":
-                    os.startfile(value)
-                else:
-                    subprocess.Popen(value, shell=True)
+                if sys.platform == "win32": os.startfile(value)
+                else: subprocess.Popen(value, shell=True)
             elif action == "Esegui comando":
                 subprocess.Popen(value, shell=True)
             elif action == "Spotify: play/pausa":
@@ -1131,10 +1283,8 @@ class App:
             if action in ("Shortcut tastiera", "Discord: muto/unmuto", "Discord: deafen/undeafen"):
                 _press_hotkey(value)
             elif action == "Apri applicazione":
-                if sys.platform == "win32":
-                    os.startfile(value)
-                else:
-                    subprocess.Popen(value, shell=True)
+                if sys.platform == "win32": os.startfile(value)
+                else: subprocess.Popen(value, shell=True)
             elif action == "Esegui comando":
                 subprocess.Popen(value, shell=True)
             elif action == "Spotify: play/pausa":
@@ -1225,7 +1375,7 @@ if __name__ == "__main__":
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror("Dipendenza mancante",
-                             "Installa pygame:\n\npython -m pip install pygame pyautogui pillow")
+                             "Installa pygame:\n\npython -m pip install pygame pyautogui pillow pynput")
         sys.exit(1)
     import pygame
     pygame.init()
