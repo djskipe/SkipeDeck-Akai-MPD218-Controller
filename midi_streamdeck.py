@@ -68,17 +68,58 @@ def _press_media(key: str, repeats=1):
 # ── Impostazioni Costanti ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 SAVE_FILE = BASE_DIR / "streamdeck_config.json"
-COORDINATES_FILE = BASE_DIR / "pad_coordinates.json"
-KNOB_COORDINATES_FILE = BASE_DIR / "knob_coordinates.json"
 PROFILES_FILE = BASE_DIR / "profiles.json"
+MODEL_FILE = BASE_DIR / "model.txt"
 
 DEFAULT_NOTES = {
-    36: "p1",  37: "p2",  38: "p3",  39: "p4",
-    40: "p5",  41: "p6",  42: "p7",  43: "p8",
-    44: "p9",  45: "p10", 46: "p11", 47: "p12",
-    48: "p13", 49: "p14", 50: "p15", 51: "p16"
+    68: "p1",  69: "p2",  70: "p3",  71: "p4",
+    72: "p5",  73: "p6",  74: "p7",  75: "p8",
+    76: "p9",  77: "p10", 78: "p11", 79: "p12",
+    80: "p13", 81: "p14", 82: "p15", 83: "p16"
 }
-KNOB_CCS = [3, 9, 12, 13, 14, 15]
+
+KNOB_CCS = {}
+KNOB_CCS_DEFAULT = {22: "k0", 23: "k1", 24: "k2", 25: "k3", 26: "k4", 27: "k5"}
+
+DEFAULT_PAD_COORDS = {
+    "p13": (191, 60, 257, 126), "p14": (270, 63, 336, 129),
+    "p15": (359, 60, 425, 126), "p16": (447, 62, 513, 128),
+    "p9":  (189,147, 255, 213), "p10": (275,145, 341, 211),
+    "p11": (359,142, 425, 208), "p12": (445,143, 511, 209),
+    "p5":  (186,225, 252, 291), "p6":  (274,222, 340, 288),
+    "p7":  (361,222, 427, 288), "p8":  (448,222, 514, 288),
+    "p1":  (189,305, 255, 371), "p2":  (274,306, 340, 372),
+    "p3":  (360,304, 426, 370), "p4":  (449,305, 515, 371),
+}
+
+MODELS = {
+    "inverted": {
+        "name": "MPD218 Inverted (manopole 5-6 in basso)",
+        "image": "mpd218_inverted.png",
+        "crop": None,
+        "knob_coords": {
+            "k0": (47, 256, 77, 286),
+            "k1": (124, 259, 154, 289),
+            "k2": (47, 166, 77, 196),
+            "k3": (124, 166, 154, 196),
+            "k4": (48, 74, 79, 108),
+            "k5": (124, 74, 154, 104),
+        },
+    },
+    "standard": {
+        "name": "MPD218 Standard (manopole 5-6 in alto)",
+        "image": "mpd218_standard.png",
+        "crop": None,
+        "knob_coords": {
+            "k4": (48, 74, 79, 108),
+            "k5": (124, 74, 154, 104),
+            "k2": (47, 166, 77, 196),
+            "k3": (124, 166, 154, 196),
+            "k0": (47, 256, 77, 286),
+            "k1": (124, 259, 154, 289),
+        },
+    },
+}
 
 ACTION_TYPES = [
     "— nessuna —", "Shortcut tastiera", "Apri applicazione", "Esegui comando",
@@ -94,18 +135,96 @@ COLORS = {
     "Trimmer: Scorrimento Pagine": "#e67e22"
 }
 
-DEFAULT_COORDINATES = {
-    "p13": (224, 60, 290, 126), "p14": (304, 60, 370, 126), "p15": (384, 60, 450, 126), "p16": (464, 60, 530, 126),
-    "p9":  (224, 142, 290, 208),"p10": (304, 142, 370, 208),"p11": (384, 142, 450, 208),"p12": (464, 142, 530, 208),
-    "p5":  (224, 224, 290, 290),"p6":  (304, 224, 370, 290),"p7":  (384, 224, 450, 290),"p8":  (464, 224, 530, 290),
-    "p1":  (224, 306, 290, 372),"p2":  (304, 306, 370, 372),"p3":  (384, 306, 450, 372),"p4":  (464, 306, 530, 372)
-}
 
-DEFAULT_KNOB_COORDINATES = {
-    "k0": (130, 240, 160, 270), "k1": (170, 240, 200, 270),
-    "k2": (130, 155, 160, 185), "k3": (170, 155, 200, 185),
-    "k4": (130, 70, 160, 100),  "k5": (170, 70, 200, 100)
-}
+# ══════════════════════════════════════════════════════════════════════════════
+def load_model_image(model_data):
+    """Carica l'immagine del modello, applica crop se definito, ridimensiona a 550x450."""
+    img = Image.open(BASE_DIR / model_data["image"])
+    if model_data.get("crop"):
+        img = img.crop(model_data["crop"])
+    img = img.resize((550, 450))
+    return img
+
+
+def load_coords_for_model(model_name):
+    """Carica coordinate pad e knob specifiche per il modello."""
+    pad_file = BASE_DIR / f"pad_coordinates_{model_name}.json"
+    knob_file = BASE_DIR / f"knob_coordinates_{model_name}.json"
+    
+    pads = dict(DEFAULT_PAD_COORDS)
+    if pad_file.exists():
+        try:
+            data = json.loads(pad_file.read_text())
+            pads = {k: tuple(v) for k, v in data.items()}
+        except: pass
+    
+    knobs = dict(MODELS[model_name]["knob_coords"])
+    if knob_file.exists():
+        try:
+            data = json.loads(knob_file.read_text())
+            knobs = {k: tuple(v) for k, v in data.items()}
+        except: pass
+    
+    return pads, knobs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+class ModelChooser(tk.Toplevel):
+    """Popup per scegliere il modello MPD218 al primo avvio."""
+    def __init__(self, parent, current="inverted"):
+        super().__init__(parent)
+        self.title("Seleziona il tuo MPD218")
+        self.configure(bg="#1c1c24")
+        self.resizable(False, False)
+        self.grab_set()
+        self.transient(parent)
+        self.result = current
+
+        tk.Label(self, text="Quale modello di MPD218 hai?",
+                 fg="white", bg="#1c1c24", font=("",14,"bold")).pack(pady=(15,5))
+        tk.Label(self, text="Scegli la versione con la disposizione delle manopole corretta.",
+                 fg="#aaa", bg="#1c1c24", font=("",9)).pack(pady=(0,15))
+
+        frame = tk.Frame(self, bg="#1c1c24")
+        frame.pack(padx=20, pady=10)
+
+        self._choice_var = tk.StringVar(value=current)
+        self._imgs = {}
+
+        for idx, (key, data) in enumerate(MODELS.items()):
+            card = tk.Frame(frame, bg="#2a2a36", bd=2, relief="solid", padx=10, pady=10)
+            card.grid(row=0, column=idx, padx=10)
+
+            try:
+                img = load_model_image(data).resize((200, 160))
+                photo = ImageTk.PhotoImage(img)
+                self._imgs[key] = photo
+                tk.Label(card, image=photo, bg="#2a2a36").pack()
+            except Exception:
+                tk.Label(card, text="(immagine non trovata)", bg="#2a2a36", fg="#888",
+                         width=25, height=8).pack()
+
+            tk.Radiobutton(card, text=data["name"], variable=self._choice_var,
+                           value=key, bg="#2a2a36", fg="white", selectcolor="#1c1c24",
+                           activebackground="#2a2a36", activeforeground="white",
+                           font=("",9,"bold"), wraplength=180, justify="center").pack(pady=5)
+
+        tk.Button(self, text="✅ Conferma", command=self._ok,
+                  bg="#2a6eba", fg="white", bd=0, padx=20, pady=8,
+                  font=("",10,"bold")).pack(pady=15)
+
+        self.geometry(f"+{parent.winfo_x()+200}+{parent.winfo_y()+100}")
+
+    def _ok(self):
+        self.result = self._choice_var.get()
+        self.destroy()
+
+    @classmethod
+    def ask(cls, parent, current="inverted"):
+        d = cls(parent, current)
+        parent.wait_window(d)
+        return d.result
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 class KeyRecorder(tk.Toplevel):
@@ -190,9 +309,13 @@ class App:
         self.active_leds = {}
         self.active_knob_leds = {}
         
-        self.current_profile = "Default"
+        self.current_profile = "inverted"
         self.profiles = {
-            "Default": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}}
+            "inverted": {
+                "note_map": {str(k): v for k, v in DEFAULT_NOTES.items()},
+                "cfg": {},
+                "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}
+            }
         }
         self.profile_assignments = {}
         
@@ -205,24 +328,25 @@ class App:
         self.knob_handles = {}
         self._knob_timer_ids = {}
         
-        self.coordinates = dict(DEFAULT_COORDINATES)
-        if COORDINATES_FILE.exists():
-            try:
-                data = json.loads(COORDINATES_FILE.read_text())
-                self.coordinates = {k: tuple(v) for k, v in data.items()}
-            except: pass
+        # Modello MPD218
+        self.current_model = "inverted"
+        if MODEL_FILE.exists():
+            saved = MODEL_FILE.read_text().strip()
+            if saved in MODELS:
+                self.current_model = saved
+        else:
+            chosen = ModelChooser.ask(self.root, self.current_model)
+            if chosen in MODELS:
+                self.current_model = chosen
+            MODEL_FILE.write_text(self.current_model)
         
-        self.knob_coordinates = dict(DEFAULT_KNOB_COORDINATES)
-        if KNOB_COORDINATES_FILE.exists():
-            try:
-                data = json.loads(KNOB_COORDINATES_FILE.read_text())
-                self.knob_coordinates = {k: tuple(v) for k, v in data.items()}
-            except: pass
+        self.coordinates, self.knob_coordinates = load_coords_for_model(self.current_model)
 
         self._load_profiles()
+        self._load_knob_cc_map()
         self._ui()
         self._start_midi()
-
+        
     def _on_closing(self):
         self.running = False
         if self.midi_thread and self.midi_thread.is_alive():
@@ -235,9 +359,9 @@ class App:
         if PROFILES_FILE.exists():
             try:
                 data = json.loads(PROFILES_FILE.read_text())
-                self.profiles = data.get("profiles", {"Default": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}}})
+                self.profiles = data.get("profiles", {"inverted": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}, "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}}})
                 self.profile_assignments = data.get("assignments", {})
-                self.current_profile = data.get("current", "Default")
+                self.current_profile = data.get("current", "inverted")
                 if self.current_profile in self.profiles:
                     profile_data = self.profiles[self.current_profile]
                     note_map_raw = profile_data.get("note_map", {})
@@ -245,8 +369,25 @@ class App:
                     self.cfg = profile_data.get("cfg", {})
             except Exception as e:
                 self._log(f"Errore caricamento profili: {e}")
-                self.profiles = {"Default": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}}}
-                self.current_profile = "Default"
+                self.profiles = {"inverted": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}, "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}}}
+                self.current_profile = "inverted"
+
+    def _load_knob_cc_map(self):
+        global KNOB_CCS
+        KNOB_CCS.clear()
+        knob_map = self.profiles.get(self.current_profile, {}).get("knob_cc_map", {})
+        if knob_map:
+            for cc_str, k_id in knob_map.items():
+                KNOB_CCS[int(cc_str)] = k_id
+        else:
+            KNOB_CCS.update(KNOB_CCS_DEFAULT)
+
+    def _save_knob_cc_map(self):
+        if self.current_profile not in self.profiles:
+            self.profiles[self.current_profile] = {}
+        self.profiles[self.current_profile]["knob_cc_map"] = {
+            str(cc): k_id for cc, k_id in KNOB_CCS.items()
+        }
 
     def _save_profiles(self):
         global PROFILES_FILE
@@ -254,6 +395,7 @@ class App:
             "note_map": {str(k): v for k, v in self.note_map.items()},
             "cfg": dict(self.cfg)
         }
+        self._save_knob_cc_map()
         data = {
             "profiles": self.profiles,
             "assignments": self.profile_assignments,
@@ -268,11 +410,13 @@ class App:
             "note_map": {str(k): v for k, v in self.note_map.items()},
             "cfg": dict(self.cfg)
         }
+        self._save_knob_cc_map()
         self.current_profile = profile_name
         profile_data = self.profiles[profile_name]
         note_map_raw = profile_data.get("note_map", {})
         self.note_map = {int(k): v for k, v in note_map_raw.items()} if note_map_raw else dict(DEFAULT_NOTES)
         self.cfg = profile_data.get("cfg", {})
+        self._load_knob_cc_map()
         self._log(f"🔄 Profilo cambiato: {profile_name}")
         self._update_profile_indicator()
         self._refresh_profile_combo()
@@ -302,7 +446,8 @@ class App:
             return
         self.profiles[name] = {
             "note_map": {str(k): v for k, v in DEFAULT_NOTES.items()},
-            "cfg": {}
+            "cfg": {},
+            "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}
         }
         self._new_profile_var.set("")
         self._new_profile_frame.pack_forget()
@@ -313,17 +458,16 @@ class App:
 
     def _delete_profile(self):
         name = self._profile_combo_var.get()
-        if name == "Default":
-            messagebox.showwarning("Attenzione", "Non puoi eliminare il profilo 'Default'!")
+        if name in ("inverted", "Default"):
+            messagebox.showwarning("Attenzione", f"Non puoi eliminare il profilo '{name}'!")
             return
         if len(self.profiles) <= 1:
             messagebox.showwarning("Attenzione", "Deve esserci almeno un profilo!")
             return
         if messagebox.askyesno("Conferma", f"Eliminare il profilo '{name}'?\n\nTutte le configurazioni andranno perse!"):
             if name == self.current_profile:
-                self._switch_profile("Default")
+                self._switch_profile("inverted")
             del self.profiles[name]
-            # Non ci sono più pulsanti extra da cui rimuovere assegnazioni
             self._refresh_profile_combo()
             self._save_profiles()
             self._log(f"🗑 Profilo '{name}' eliminato")
@@ -349,11 +493,40 @@ class App:
         info_text += "Pertanto sono stati rimossi dall'interfaccia."
         messagebox.showinfo("Pulsanti non supportati", info_text)
 
+    def _on_model_change(self, event=None):
+        """Cambia modello MPD218, ricarica immagine + coordinate + profilo associato."""
+        selected_name = self._model_var.get()
+        for key, data in MODELS.items():
+            if data["name"] == selected_name:
+                self.current_model = key
+                break
+        MODEL_FILE.write_text(self.current_model)
+        
+        # Associa profilo al modello (stesso nome)
+        if self.current_model in self.profiles and self.current_model != self.current_profile:
+            self._switch_profile(self.current_model)
+            self._refresh_profile_combo()
+        
+        # Ricarica coordinate specifiche per il modello
+        self.coordinates, self.knob_coordinates = load_coords_for_model(self.current_model)
+        
+        # Ricarica immagine
+        try:
+            model_data = MODELS[self.current_model]
+            img = load_model_image(model_data)
+            self.tk_img = ImageTk.PhotoImage(img)
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor="nw", image=self.tk_img)
+        except Exception as e:
+            self._log(f"Errore caricamento immagine: {e}")
+        
+        self._refresh_all_assignments()
+        self._log(f"🔄 Modello cambiato: {MODELS[self.current_model]['name']} → profilo: {self.current_profile}")
+
     def _ui(self):
         self.root.rowconfigure(1, weight=1)
         self.root.columnconfigure(0, weight=1)
 
-        # Barra superiore
         sb = tk.Frame(self.root, bg="#1a1a2e", pady=4)
         sb.grid(row=0, column=0, sticky="ew")
         self._dot = tk.Label(sb, text="●", fg="#e74c3c", bg="#1a1a2e", font=("",12))
@@ -364,12 +537,20 @@ class App:
         self._cal_ind.pack(side="left", padx=10)
         self._profile_lbl = tk.Label(sb, text=f"Profilo: {self.current_profile}", fg="#4a90d9", bg="#1a1a2e", font=("Helvetica",9,"bold"))
         self._profile_lbl.pack(side="left", padx=15)
+        
+        self._model_var = tk.StringVar(value=MODELS[self.current_model]["name"])
+        model_combo = ttk.Combobox(sb, textvariable=self._model_var,
+                                    values=[m["name"] for m in MODELS.values()],
+                                    state="readonly", width=38)
+        model_combo.pack(side="right", padx=6)
+        model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
+        tk.Label(sb, text="Modello:", fg="#888", bg="#1a1a2e", font=("",8)).pack(side="right")
+        
         self._dev = tk.StringVar()
         self._dcb = ttk.Combobox(sb, textvariable=self._dev, state="readonly", width=22)
         self._dcb.pack(side="right", padx=6)
         tk.Button(sb, text="🔄 Connetti", command=self._start_midi, bg="#333", fg="white", bd=0, padx=8, pady=2).pack(side="right")
 
-        # Corpo centrale
         body = tk.Frame(self.root, bg="#111")
         body.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         body.rowconfigure(0, weight=1)
@@ -377,7 +558,6 @@ class App:
         body.columnconfigure(1, weight=0)
         body.columnconfigure(2, weight=2)
 
-        # --- PANNELLO SINISTRO (MANOPOLE) ---
         k_frame = tk.Frame(body, bg="#141419", bd=1, relief="solid", padx=10, pady=10)
         k_frame.grid(row=0, column=0, sticky="nsew", padx=(0,4))
         for r in range(3):
@@ -385,11 +565,10 @@ class App:
         for c in range(2):
             k_frame.columnconfigure(c, weight=1)
 
-        # Ordine corretto: manopole 1,2 in alto; 3,4 centro; 5,6 in basso
         knob_layout = [
-            ("k0", 0, 0), ("k1", 0, 1),   # Manopola 1 e 2
-            ("k2", 1, 0), ("k3", 1, 1),   # Manopola 3 e 4
-            ("k4", 2, 0), ("k5", 2, 1)    # Manopola 5 e 6
+            ("k0", 0, 0), ("k1", 0, 1),
+            ("k2", 1, 0), ("k3", 1, 1),
+            ("k4", 2, 0), ("k5", 2, 1)
         ]
         for idx, (k_id, row, col) in enumerate(knob_layout):
             b = tk.Button(k_frame, text=f"MANOPOLA {idx+1}\n[Inattiva]", bg="#222", fg="#888",
@@ -397,18 +576,17 @@ class App:
             b.grid(row=row, column=col, sticky="nsew", padx=3, pady=3)
             self.knob_btns[k_id] = b
 
-        # Disclaimer pulsanti non funzionanti (sostituisce i vecchi extra buttons)
         disclaimer = tk.Label(k_frame, text="⚠️ I tasti CTRL BANK, PAD BANK,\nFULL LEVEL, PROG SELECT, NR CONFIG,\nNOTE REPEAT non inviano segnali MIDI.\nNon sono utilizzabili.",
                               bg="#141419", fg="#ffaa00", font=("Helvetica",7), justify="left")
         disclaimer.grid(row=3, column=0, columnspan=2, pady=(10,0), sticky="w")
 
-        # --- PANNELLO CENTRALE (FOTO) ---
         c_frame = tk.Frame(body, bg="#111")
         c_frame.grid(row=0, column=1, sticky="nsew", padx=(0,4))
         self.canvas = tk.Canvas(c_frame, width=550, height=450, bg="#111", highlightthickness=0)
         self.canvas.pack(expand=True)
         try:
-            img = Image.open("mpd218.png").resize((550, 450))
+            model_data = MODELS[self.current_model]
+            img = load_model_image(model_data)
             self.tk_img = ImageTk.PhotoImage(img)
             self.canvas.create_image(0, 0, anchor="nw", image=self.tk_img)
         except Exception as e:
@@ -417,7 +595,6 @@ class App:
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
 
-        # --- PANNELLO DESTRO ---
         right = tk.Frame(body, bg="#1a1a26", padx=12, pady=12, bd=1, relief="solid")
         right.grid(row=0, column=2, sticky="nsew")
 
@@ -461,11 +638,9 @@ class App:
         self._learn_btn = tk.Button(right, text="🎯 Mappatura MIDI (Learn)", command=self._toggle_learn, bg="#e67e22", fg="white", bd=0, padx=10, pady=4, state="disabled")
         self._learn_btn.pack(anchor="w", pady=6)
 
-        # ── SEZIONE PROFILI (semplificata, senza pulsanti extra) ──────────────
         profile_frame = tk.LabelFrame(right, text="🎭 PROFILI", fg="#ff9800", bg="#1a1a26", font=("",10,"bold"))
         profile_frame.pack(fill="x", pady=(15,5))
 
-        # Profilo attuale
         tk.Label(profile_frame, text="📌 Profilo attuale:", fg="#aaa", bg="#1a1a26", font=("",8)).pack(anchor="w", pady=(5,2))
         current_frame = tk.Frame(profile_frame, bg="#1a1a26")
         current_frame.pack(fill="x", pady=2)
@@ -476,7 +651,6 @@ class App:
         tk.Button(current_frame, text="➕ Nuovo", command=self._create_profile, bg="#27ae60", fg="white", bd=0, padx=6, pady=2, font=("",8)).pack(side="left", padx=2)
         tk.Button(current_frame, text="🗑 Elimina", command=self._delete_profile, bg="#c0392b", fg="white", bd=0, padx=6, pady=2, font=("",8)).pack(side="left")
 
-        # Frame creazione nuovo profilo (nascosto)
         self._new_profile_frame = tk.Frame(profile_frame, bg="#1a1a26")
         tk.Label(self._new_profile_frame, text="Nome:", fg="#aaa", bg="#1a1a26", font=("",8)).pack(side="left", padx=2)
         self._new_profile_var = tk.StringVar()
@@ -485,7 +659,6 @@ class App:
         tk.Button(self._new_profile_frame, text="✅", command=self._create_profile, bg="#27ae60", fg="white", bd=0, padx=4, pady=2, font=("",8)).pack(side="left", padx=1)
         tk.Button(self._new_profile_frame, text="❌", command=self._cancel_new_profile, bg="#666", fg="white", bd=0, padx=4, pady=2, font=("",8)).pack(side="left")
 
-        # Percorso salvataggio
         tk.Label(profile_frame, text="💾 Salva in:", fg="#aaa", bg="#1a1a26", font=("",8)).pack(anchor="w", pady=(8,2))
         path_frame = tk.Frame(profile_frame, bg="#1a1a26")
         path_frame.pack(fill="x", pady=2)
@@ -494,13 +667,11 @@ class App:
         self._profile_path_entry.pack(side="left", fill="x", expand=True)
         tk.Button(path_frame, text="📁 Sfoglia", command=self._browse_profile_path, bg="#444", fg="white", bd=0, padx=6, pady=2, font=("",7)).pack(side="left", padx=2)
 
-        # Disclaimer pulsanti non funzionanti
         tk.Button(profile_frame, text="ℹ️ Perché non ci sono CTRL BANK ecc.?", command=self._show_unused_buttons_info,
                   bg="#333", fg="#888", bd=0, padx=4, pady=1, font=("",7)).pack(anchor="w", pady=(5,2))
 
         self._refresh_profile_combo()
 
-        # Pulsanti in basso
         btn2 = tk.Frame(right, bg="#1a1a26")
         btn2.pack(anchor="w", side="bottom", pady=4)
         tk.Button(btn2, text="💾 Salva", command=self._save_profiles, bg="#27ae60", fg="white", bd=0, padx=8, pady=4).pack(side="left", padx=(0,4))
@@ -508,18 +679,15 @@ class App:
         tk.Button(btn2, text="⬆ Esporta", command=self._export, bg="#444", fg="white", bd=0, padx=8, pady=4).pack(side="left")
         tk.Button(btn2, text="🔧 Calibra", command=self._toggle_calibrate, bg="#ff6b35", fg="white", bd=0, padx=8, pady=4).pack(side="left", padx=(4,0))
 
-        # Log
         lf = tk.Frame(self.root, bg="#111", padx=8, pady=4)
         lf.grid(row=2, column=0, sticky="ew")
         self._log_w = tk.Text(lf, height=3, bg="#050505", fg="#58d68d", font=("Courier",8), state="disabled", relief="flat")
         self._log_w.pack(fill="x")
 
-        # Inizializza i disegni
         self._refresh_all_assignments()
         self._update_profile_indicator()
 
     def _refresh_all_assignments(self):
-        """Ridisegna tutti i bordi colorati e selezioni."""
         for key in list(self.coordinates.keys()):
             self._refresh_btn(key)
         for key in list(self.knob_coordinates.keys()):
@@ -566,7 +734,7 @@ class App:
         else:
             btn = self.knob_btns.get(key)
             if btn:
-                idx = int(key[1:]) + 1  # k0 → 1, k1 → 2, etc.
+                idx = int(key[1:]) + 1
                 if action != "— nessuna —":
                     btn.config(bg=COLORS.get(action, "#222"), fg="white",
                                text=f"MANOPOLA {idx}\n{label}")
@@ -575,7 +743,6 @@ class App:
                                text=f"MANOPOLA {idx}\n[Inattiva]")
             self._draw_knob_assignments()
 
-    # ── CALIBRAZIONE ──────────────────────────────────────────────────────
     def _toggle_calibrate(self):
         self.calibrate_mode = not self.calibrate_mode
         self.cal_drag_pad = None
@@ -618,9 +785,11 @@ class App:
         self.knob_handles = {}
 
     def _save_coordinates(self):
-        COORDINATES_FILE.write_text(json.dumps({k: list(v) for k, v in self.coordinates.items()}, indent=2))
-        KNOB_COORDINATES_FILE.write_text(json.dumps({k: list(v) for k, v in self.knob_coordinates.items()}, indent=2))
-        self._log("Coordinate salvate!")
+        pad_file = BASE_DIR / f"pad_coordinates_{self.current_model}.json"
+        knob_file = BASE_DIR / f"knob_coordinates_{self.current_model}.json"
+        pad_file.write_text(json.dumps({k: list(v) for k, v in self.coordinates.items()}, indent=2))
+        knob_file.write_text(json.dumps({k: list(v) for k, v in self.knob_coordinates.items()}, indent=2))
+        self._log(f"Coordinate salvate per modello: {self.current_model}")
 
     def _on_canvas_click(self, event):
         x, y = event.x, event.y
@@ -644,7 +813,6 @@ class App:
                             threading.Thread(target=self._exec_knob_click, args=(k_id,), daemon=True).start()
                     return
             return
-        # Calibrate mode
         element_id = None
         element_type = None
         for pad_id, (x1, y1, x2, y2) in self.coordinates.items():
@@ -709,7 +877,6 @@ class App:
         self.cal_drag_element_type = None
         self.cal_drag_start = None
 
-    # ── ILLUMINAZIONE (FLASH) ─────────────────────────────────────────────
     def _flash_pad_on(self, key):
         if key in self.coordinates and key not in self.active_leds:
             x1, y1, x2, y2 = self.coordinates[key]
@@ -763,7 +930,6 @@ class App:
     def _flash_knob_move(self, key, current_val):
         self._flash_knob_on(key, current_val)
 
-    # ── SELEZIONE E CONFIGURAZIONE ─────────────────────────────────────────
     def _sel(self, key, display_name):
         old = self.selected
         self.selected = key
@@ -775,7 +941,7 @@ class App:
         self._on_action()
         self._ok_btn.config(state="normal")
         self._del_btn.config(state="normal")
-        self._learn_btn.config(state="normal" if key.startswith("p") else "disabled")
+        self._learn_btn.config(state="normal")
         if old:
             self._refresh_btn(old)
         self._refresh_btn(key)
@@ -836,9 +1002,11 @@ class App:
             if not self.selected:
                 return
             self.learn = True
-            self._learn_btn.config(text="In ascolto... Premi il Pad fisico", bg="#c0392b")
+            if self.selected.startswith("p"):
+                self._learn_btn.config(text="In ascolto... Premi il PAD fisico", bg="#c0392b")
+            else:
+                self._learn_btn.config(text="In ascolto... Ruota la MANOPOLA fisica", bg="#c0392b")
 
-    # ── MIDI ────────────────────────────────────────────────────────────────
     def _start_midi(self):
         if not MIDI_OK:
             return
@@ -879,6 +1047,7 @@ class App:
 
     def _handle_safe_midi(self, ev):
         status, d1, d2 = ev[0][0] & 0xF0, ev[0][1], ev[0][2]
+
         if status == 0x90 and d2 > 0:
             if self.learn and self.selected and self.selected.startswith("p"):
                 for k in [k for k, v in self.note_map.items() if v == self.selected]:
@@ -886,6 +1055,7 @@ class App:
                 self.note_map[d1] = self.selected
                 self.learn = False
                 self._learn_btn.config(text="🎯 Mappatura MIDI (Learn)", bg="#e67e22")
+                self._log(f"✅ Learn PAD: nota {d1} → {self.selected}")
                 self._save_profiles()
                 return
             key = self.note_map.get(d1)
@@ -893,26 +1063,38 @@ class App:
                 self._flash_pad_on(key)
                 if key in self.cfg:
                     self._exec_pad(key)
+
         elif status == 0x80 or (status == 0x90 and d2 == 0):
             key = self.note_map.get(d1)
             if key:
                 self._flash_pad_off(key)
+
         elif status == 0xB0:
-            # I pulsanti extra sono stati rimossi, non gestiamo più PROFILE_BUTTONS
-            for i, cc in enumerate(KNOB_CCS):
-                if d1 == cc:
-                    k = f"k{i}"
-                    self._flash_knob_move(k, d2)
-                    if k in self.cfg:
-                        last_val = self.knob_vals.get(k, d2)
-                        self.knob_vals[k] = d2
-                        delta = d2 - last_val
-                        if d2 == 127:
-                            delta = 4
-                        elif d2 == 0:
-                            delta = -4
-                        if delta != 0:
-                            self._exec_knob(k, delta, max(1, min(10, abs(delta))))
+            if self.learn and self.selected and self.selected.startswith("k"):
+                for cc, k_id in list(KNOB_CCS.items()):
+                    if k_id == self.selected:
+                        del KNOB_CCS[cc]
+                KNOB_CCS[d1] = self.selected
+                self.learn = False
+                self._learn_btn.config(text="🎯 Mappatura MIDI (Learn)", bg="#e67e22")
+                self._log(f"✅ Learn KNOB: CC {d1} → {self.selected}")
+                self._save_knob_cc_map()
+                self._save_profiles()
+                return
+
+            k = KNOB_CCS.get(d1)
+            if k:
+                self._flash_knob_move(k, d2)
+                if k in self.cfg:
+                    last_val = self.knob_vals.get(k, d2)
+                    self.knob_vals[k] = d2
+                    delta = d2 - last_val
+                    if d2 == 127:
+                        delta = 4
+                    elif d2 == 0:
+                        delta = -4
+                    if delta != 0:
+                        self._exec_knob(k, delta, max(1, min(10, abs(delta))))
 
     def _exec_pad(self, key):
         cfg = self.cfg.get(key, {})
@@ -1008,7 +1190,7 @@ class App:
             if "profiles" in data:
                 self.profiles = data.get("profiles", {})
                 self.profile_assignments = data.get("assignments", {})
-                self.current_profile = data.get("current", "Default")
+                self.current_profile = data.get("current", "inverted")
                 if self.current_profile in self.profiles:
                     profile_data = self.profiles[self.current_profile]
                     note_map_raw = profile_data.get("note_map", {})
@@ -1017,7 +1199,8 @@ class App:
             else:
                 self.note_map = {int(k): v for k, v in data.pop("_nmap", {}).items()}
                 self.cfg = data
-                self.profiles["Default"] = {"note_map": {str(k): v for k, v in self.note_map.items()}, "cfg": dict(self.cfg)}
+                self.profiles["inverted"] = {"note_map": {str(k): v for k, v in self.note_map.items()}, "cfg": dict(self.cfg)}
+            self._load_knob_cc_map()
             self._refresh_profile_combo()
             self._update_profile_indicator()
             self._refresh_all_assignments()
@@ -1031,6 +1214,7 @@ class App:
         if not p:
             return
         self.profiles[self.current_profile] = {"note_map": {str(k): v for k, v in self.note_map.items()}, "cfg": dict(self.cfg)}
+        self._save_knob_cc_map()
         data = {"profiles": self.profiles, "assignments": self.profile_assignments, "current": self.current_profile}
         Path(p).write_text(json.dumps(data, indent=2, ensure_ascii=False))
         self._log("Configurazione esportata.")
