@@ -29,6 +29,12 @@ try:
 except ImportError:
     PYNPUT_OK = False
 
+try:
+    import pystray
+    TRAY_OK = True
+except ImportError:
+    TRAY_OK = False
+
 import ctypes as _ctypes, sys as _sys, time as _time_mod
 
 _VK = {
@@ -518,8 +524,108 @@ class App:
         self._load_knob_cc_map()
         self._ui()
         self._start_midi()
+        self._tray_icon = None
 
     def _on_closing(self):
+        """Quando si preme X: chiede se minimizzare nella tray o chiudere."""
+        if TRAY_OK:
+            choice = self._ask_tray_or_quit()
+            if choice == "tray":
+                self._minimize_to_tray()
+                return
+            elif choice == "cancel":
+                return
+        # Chiusura definitiva
+        self._quit_app()
+
+    def _ask_tray_or_quit(self):
+        """Dialog personalizzato: Tray / Chiudi / Annulla."""
+        result = {"val": "cancel"}
+        d = tk.Toplevel(self.root)
+        d.title("SkipeDeck")
+        d.configure(bg="#1c1c24")
+        d.resizable(False, False)
+        d.grab_set()
+        d.transient(self.root)
+
+        tk.Label(d, text="Cosa vuoi fare?", fg="white", bg="#1c1c24",
+                 font=("Helvetica", 12, "bold")).pack(pady=(18, 4))
+        tk.Label(d, text="SkipeDeck può continuare a girare in background\n"
+                          "e restare disponibile nelle icone nascoste.",
+                 fg="#aaa", bg="#1c1c24", font=("", 9), justify="center").pack(pady=(0, 14))
+
+        btn_f = tk.Frame(d, bg="#1c1c24")
+        btn_f.pack(pady=(0, 16), padx=20)
+
+        def _tray():
+            result["val"] = "tray"
+            d.destroy()
+
+        def _quit():
+            result["val"] = "quit"
+            d.destroy()
+
+        def _cancel():
+            result["val"] = "cancel"
+            d.destroy()
+
+        tk.Button(btn_f, text="🔽  Minimizza nella tray", command=_tray,
+                  bg="#2a6eba", fg="white", bd=0, padx=14, pady=7,
+                  font=("", 9, "bold"), width=22).pack(side="left", padx=4)
+        tk.Button(btn_f, text="❌  Chiudi definitivamente", command=_quit,
+                  bg="#c0392b", fg="white", bd=0, padx=14, pady=7,
+                  font=("", 9), width=22).pack(side="left", padx=4)
+
+        tk.Button(d, text="Annulla", command=_cancel,
+                  bg="#333", fg="#aaa", bd=0, padx=10, pady=4,
+                  font=("", 8)).pack(pady=(0, 10))
+
+        d.geometry(f"+{self.root.winfo_x()+200}+{self.root.winfo_y()+180}")
+        d.protocol("WM_DELETE_WINDOW", _cancel)
+        self.root.wait_window(d)
+        return result["val"]
+
+    def _minimize_to_tray(self):
+        """Nasconde la finestra e crea l'icona nella system tray."""
+        self.root.withdraw()
+        # Crea un'icona semplice (cerchio colorato su sfondo scuro)
+        size = 64
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        try:
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(img)
+            draw.ellipse([4, 4, size - 4, size - 4], fill="#2a6eba")
+            draw.text((size // 2 - 8, size // 2 - 8), "SD", fill="white")
+        except Exception:
+            img = Image.new("RGB", (size, size), "#2a6eba")
+
+        def _show(icon, item):
+            icon.stop()
+            self._tray_icon = None
+            self.root.after(0, self.root.deiconify)
+            self.root.after(0, self.root.lift)
+
+        def _quit(icon, item):
+            icon.stop()
+            self._tray_icon = None
+            self.root.after(0, self._quit_app)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("▶  Mostra SkipeDeck", _show, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("✕  Esci", _quit),
+        )
+        self._tray_icon = pystray.Icon("SkipeDeck", img, "SkipeDeck", menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        self._log("🔽 Minimizzato nella system tray — doppio clic sull'icona per riaprire")
+
+    def _quit_app(self):
+        """Chiusura pulita dell'applicazione."""
+        if self._tray_icon:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
         self.running = False
         if self.midi_thread and self.midi_thread.is_alive():
             self.midi_thread.join(timeout=0.2)
