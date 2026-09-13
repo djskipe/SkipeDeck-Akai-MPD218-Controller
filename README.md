@@ -30,8 +30,8 @@ Grazie a un’interfaccia grafica con foto interattiva, puoi assegnare ai 16 pad
 
 ## 📦 Requisiti e installazione
 
-**Sistema:** Windows (10/11) – può funzionare anche su Linux/Mac con le dovute dipendenze.  
-**Python:** 3.8 o superiore.
+**Sistema:** Windows (10/11)
+**Python:** 3.12.0
 
 ### Avvio rapido (Windows)
 1. Scarica o clona il repository.
@@ -40,7 +40,7 @@ Grazie a un’interfaccia grafica con foto interattiva, puoi assegnare ai 16 pad
    - Lancia l’applicazione.
 3. Collega l’MPD218 via USB **prima** di avviare (o premi **🔄 Connetti** nell’app).
 
-### Avvio manuale (qualsiasi OS)
+### Avvio manuale
 ```bash
 pip install pygame pyautogui pillow
 python midi_streamdeck.py
