@@ -106,12 +106,20 @@ def _press_hotkey(combo: str, repeats=1):
 
 def _press_media(key: str, repeats=1):
     vk = _VK.get(key)
+    if key in ("volumeup", "volumedown", "mute"):
+        logger.info("Volume media-key richiesta: key=%s vk=0x%02X repeats=%s platform=%s",
+                    key, vk if vk is not None else 0, repeats, _sys.platform)
     if vk and _sys.platform == 'win32':
+        # Volume OS via VK_MEDIA_*: non usa pycaw/comtypes e non richiede COM init.
         u32 = _ctypes.windll.user32
         for _ in range(repeats):
-            u32.keybd_event(vk, 0, 0, 0); _time_mod.sleep(0.02); u32.keybd_event(vk, 0, 2, 0)
+            u32.keybd_event(vk, 0, 0, 0)
+            _time_mod.sleep(0.02)
+            u32.keybd_event(vk, 0, 2, 0)
     elif AUTO_OK:
         for _ in range(repeats): pyautogui.press(key)
+    elif key in ("volumeup", "volumedown", "mute"):
+        logger.error("Impossibile inviare il volume: piattaforma non Windows e pyautogui non disponibile")
 
 # ── Impostazioni Costanti ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -637,14 +645,18 @@ class App:
         """Esegue nel main thread le operazioni inviate dai thread ausiliari."""
         if self._closing:
             return
-        try:
-            while True:
+        while True:
+            try:
                 callback, args = self._ui_events.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 callback(*args)
-        except queue.Empty:
-            pass
-        except Exception as e:
-            logger.exception("Errore nel dispatcher UI: %s", e)
+            except Exception as e:
+                # Isola l'evento guasto: gli eventi MIDI successivi, volume incluso,
+                # devono comunque essere drenati in questo ciclo UI.
+                logger.exception("Errore dispatcher UI per %s: %s",
+                                 getattr(callback, "__name__", repr(callback)), e)
         if not self._closing:
             self.root.after(25, self._drain_ui_events)
 
@@ -1632,14 +1644,23 @@ class App:
             k = KNOB_CCS.get(d1)
             if k:
                 self._flash_knob_move(k, d2)
-                if k in self.cfg:
+                cfg = self.cfg.get(k, {})
+                if cfg:
                     last_val = self.knob_vals.get(k, d2)
                     self.knob_vals[k] = d2
                     delta = d2 - last_val
                     if d2 == 127: delta = 4
                     elif d2 == 0: delta = -4
                     if delta != 0:
+                        if cfg.get("action") == "Trimmer: Volume OS (Su/Giù)":
+                            logger.info("Volume CC: cc=%d knob=%s value=%d previous=%d delta=%d",
+                                        d1, k, d2, last_val, delta)
                         self._exec_knob(k, delta, max(1, min(10, abs(delta))))
+                else:
+                    logger.debug("CC ricevuto ma knob %s (CC %d) senza azione configurata: value=%d",
+                                 k, d1, d2)
+            else:
+                logger.debug("CC MIDI non mappato: cc=%d value=%d", d1, d2)
 
     def _exec_pad(self, key):
         cfg = self.cfg.get(key, {})
@@ -1695,13 +1716,20 @@ class App:
         try:
             self._log(f"🎛️ KNOB ROTATE: {cfg.get('label')} ({key.upper()}) delta={delta} [{self.current_profile}]")
             if action == "Trimmer: Volume OS (Su/Giù)":
-                _press_media("volumeup" if delta > 0 else "volumedown", repeats)
+                media_key = "volumeup" if delta > 0 else "volumedown"
+                logger.info("Esecuzione volume OS: knob=%s delta=%d media_key=%s repeats=%d",
+                            key, delta, media_key, repeats)
+                _press_media(media_key, repeats)
             elif action == "Trimmer: Player Video YouTube/VLC":
                 _press_hotkey("right" if delta > 0 else "left", repeats)
             elif action == "Trimmer: Scorrimento Pagine":
                 _press_hotkey("down" if delta > 0 else "up", repeats)
         except Exception as e:
-            logger.exception("Errore esecuzione azione: %s", e)
+            if action == "Trimmer: Volume OS (Su/Giù)":
+                logger.exception("Errore esecuzione volume OS (knob=%s, delta=%s, repeats=%s): %s",
+                                 key, delta, repeats, e)
+            else:
+                logger.exception("Errore esecuzione azione: %s", e)
             self._log(f"Errore: {e}")
 
     def _status(self, ok, text):
