@@ -5,7 +5,7 @@ MIDI StreamDeck — Versione Definitiva: Foto Interattiva + Macro + Calibrazione
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import threading, json, subprocess, os, sys, time
+import threading, json, subprocess, os, sys, time, queue, logging
 from pathlib import Path
 from PIL import Image, ImageTk
 
@@ -117,7 +117,67 @@ def _press_media(key: str, repeats=1):
 BASE_DIR = Path(__file__).parent
 SAVE_FILE = BASE_DIR / "streamdeck_config.json"
 PROFILES_FILE = BASE_DIR / "profiles.json"
+if os.name == "nt":
+    USER_CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "SkipeDeck"
+else:
+    USER_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "SkipeDeck"
+USER_PROFILES_FILE = USER_CONFIG_DIR / "profiles.json"
+if not PROFILES_FILE.exists() and USER_PROFILES_FILE.exists():
+    PROFILES_FILE = USER_PROFILES_FILE
+LOG_FILE = BASE_DIR / "midi_streamdeck.log"
+logger = logging.getLogger("midi_streamdeck")
+if not logger.handlers:
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(threadName)s %(message)s")
+    try:
+        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        logger.addHandler(file_handler)
+    except Exception as e:
+        logging.basicConfig(level=logging.INFO)
+        logging.exception("Log file non scrivibile; uso stderr: %s", e)
+    else:
+        file_handler.setFormatter(formatter)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+    logger.setLevel(logging.INFO)
 MODEL_FILE = BASE_DIR / "model.txt"
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE_NAME = "SkipeDeck"
+START_IN_TRAY = "--tray" in sys.argv[1:]
+
+def _startup_command(start_in_tray=None):
+    """Restituisce la command line per l'avvio automatico senza modificarla."""
+    if start_in_tray is None:
+        start_in_tray = False
+    if getattr(sys, "frozen", False):
+        command = [sys.executable]
+    else:
+        executable = Path(sys.executable)
+        if sys.platform == "win32" and executable.name.lower() == "python.exe":
+            pythonw = executable.with_name("pythonw.exe")
+            if pythonw.exists():
+                executable = pythonw
+        command = [str(executable), str(Path(__file__).resolve())]
+    if start_in_tray:
+        command.append("--tray")
+    return subprocess.list2cmdline(command)
+
+def _set_startup_registration(enabled, start_in_tray=False):
+    """Aggiorna la voce Run HKCU. Fuori da Windows non tocca il registro."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+        if enabled:
+            winreg.SetValueEx(key, RUN_VALUE_NAME, 0, winreg.REG_SZ,
+                              _startup_command(start_in_tray))
+        else:
+            try:
+                winreg.DeleteValue(key, RUN_VALUE_NAME)
+            except FileNotFoundError:
+                pass
+    return True
 
 DEFAULT_NOTES = {
     68: "p1",  69: "p2",  70: "p3",  71: "p4",
@@ -202,14 +262,16 @@ def load_coords_for_model(model_name):
         try:
             data = json.loads(pad_file.read_text())
             pads = {k: tuple(v) for k, v in data.items()}
-        except: pass
+        except Exception as e:
+            logger.exception("Impossibile caricare coordinate pad da %s: %s", pad_file, e)
     
     knobs = dict(MODELS[model_name]["knob_coords"])
     if knob_file.exists():
         try:
             data = json.loads(knob_file.read_text())
             knobs = {k: tuple(v) for k, v in data.items()}
-        except: pass
+        except Exception as e:
+            logger.exception("Impossibile caricare coordinate knob da %s: %s", knob_file, e)
     
     return pads, knobs
 
@@ -245,7 +307,8 @@ class ModelChooser(tk.Toplevel):
                 photo = ImageTk.PhotoImage(img)
                 self._imgs[key] = photo
                 tk.Label(card, image=photo, bg="#2a2a36").pack()
-            except Exception:
+            except Exception as e:
+                logger.exception("Impossibile caricare immagine modello %s: %s", key, e)
                 tk.Label(card, text="(immagine non trovata)", bg="#2a2a36", fg="#888",
                          width=25, height=8).pack()
 
@@ -284,7 +347,10 @@ class KeyRecorder(tk.Toplevel):
         self.result = None
         self.keys = []
         self._recording = True
+        self._closed = False
         self._listener = None
+        self._listener_events = queue.Queue()
+        self.after(30, self._poll_listener_events)
 
         tk.Label(self, text="Premi la combinazione di tasti desiderata...",
                  fg="white", bg="#1c1c24", font=("",11), pady=8).pack()
@@ -324,75 +390,75 @@ class KeyRecorder(tk.Toplevel):
                     # Numpad numeri (0x60 - 0x69)
                     if 0x60 <= vk <= 0x69:
                         numpad_num = vk - 0x60
-                        self._add_key(f'numpad{numpad_num}')
+                        self._listener_events.put(("add", f'numpad{numpad_num}'))
                         return
                     # Numpad operatori
                     elif vk == 0x6F:
-                        self._add_key('numpad/'); return
+                        self._listener_events.put(("add", 'numpad/')); return
                     elif vk == 0x6A:
-                        self._add_key('numpad*'); return
+                        self._listener_events.put(("add", 'numpad*')); return
                     elif vk == 0x6D:
-                        self._add_key('numpad-'); return
+                        self._listener_events.put(("add", 'numpad-')); return
                     elif vk == 0x6B:
-                        self._add_key('numpad+'); return
+                        self._listener_events.put(("add", 'numpad+')); return
                     elif vk == 0x6E:
-                        self._add_key('numpad.'); return
+                        self._listener_events.put(("add", 'numpad.')); return
                 
                 # ── Modificatori ──
                 if key in (pk.Key.ctrl_l, pk.Key.ctrl_r, pk.Key.ctrl):
-                    self._add_key('ctrl')
+                    self._listener_events.put(("add", 'ctrl'))
                 elif key in (pk.Key.shift_l, pk.Key.shift_r, pk.Key.shift):
-                    self._add_key('shift')
+                    self._listener_events.put(("add", 'shift'))
                 elif key in (pk.Key.alt_l, pk.Key.alt_r, pk.Key.alt, pk.Key.alt_gr):
-                    self._add_key('alt')
+                    self._listener_events.put(("add", 'alt'))
                 elif key in (pk.Key.cmd, pk.Key.cmd_l, pk.Key.cmd_r):
-                    self._add_key('win')
+                    self._listener_events.put(("add", 'win'))
                 
                 # ── Tasti di controllo ──
                 elif key == pk.Key.esc:
-                    self.after(0, self._cancel)
+                    self._listener_events.put(("cancel", None))
                     return False
                 elif key == pk.Key.enter:
-                    self.after(0, self._ok)
+                    self._listener_events.put(("ok", None))
                     return False
                 elif key == pk.Key.space:
-                    self._add_key('space')
+                    self._listener_events.put(("add", 'space'))
                 elif key == pk.Key.tab:
-                    self._add_key('tab')
+                    self._listener_events.put(("add", 'tab'))
                 elif key == pk.Key.backspace:
-                    self._add_key('backspace')
+                    self._listener_events.put(("add", 'backspace'))
                 elif key == pk.Key.delete:
-                    self._add_key('delete')
+                    self._listener_events.put(("add", 'delete'))
                 elif key == pk.Key.insert:
-                    self._add_key('insert')
+                    self._listener_events.put(("add", 'insert'))
                 elif key == pk.Key.home:
-                    self._add_key('home')
+                    self._listener_events.put(("add", 'home'))
                 elif key == pk.Key.end:
-                    self._add_key('end')
+                    self._listener_events.put(("add", 'end'))
                 elif key == pk.Key.page_up:
-                    self._add_key('pageup')
+                    self._listener_events.put(("add", 'pageup'))
                 elif key == pk.Key.page_down:
-                    self._add_key('pagedown')
+                    self._listener_events.put(("add", 'pagedown'))
                 elif key == pk.Key.up:
-                    self._add_key('up')
+                    self._listener_events.put(("add", 'up'))
                 elif key == pk.Key.down:
-                    self._add_key('down')
+                    self._listener_events.put(("add", 'down'))
                 elif key == pk.Key.left:
-                    self._add_key('left')
+                    self._listener_events.put(("add", 'left'))
                 elif key == pk.Key.right:
-                    self._add_key('right')
+                    self._listener_events.put(("add", 'right'))
                 elif key == pk.Key.caps_lock:
-                    self._add_key('capslock')
+                    self._listener_events.put(("add", 'capslock'))
                 elif key == pk.Key.num_lock:
-                    self._add_key('numlock')
+                    self._listener_events.put(("add", 'numlock'))
                 elif key == pk.Key.scroll_lock:
-                    self._add_key('scrolllock')
+                    self._listener_events.put(("add", 'scrolllock'))
                 elif key == pk.Key.print_screen:
-                    self._add_key('printscreen')
+                    self._listener_events.put(("add", 'printscreen'))
                 elif key == pk.Key.pause:
-                    self._add_key('pause')
+                    self._listener_events.put(("add", 'pause'))
                 elif key == pk.Key.menu:
-                    self._add_key('menu')
+                    self._listener_events.put(("add", 'menu'))
                 
                 # ── Tasti funzione F1-F24 ──
                 elif hasattr(pk.Key, 'f1'):
@@ -400,18 +466,18 @@ class KeyRecorder(tk.Toplevel):
                     for i in range(1, 25):
                         fkey = getattr(pk.Key, f'f{i}', None)
                         if fkey is not None and key == fkey:
-                            self._add_key(f'f{i}')
+                            self._listener_events.put(("add", f'f{i}'))
                             matched = True
                             break
                     if not matched and hasattr(key, 'char') and key.char:
-                        self._add_key(key.char.lower())
+                        self._listener_events.put(("add", key.char.lower()))
                 
                 # ── Caratteri normali ──
                 elif hasattr(key, 'char') and key.char:
-                    self._add_key(key.char.lower())
+                    self._listener_events.put(("add", key.char.lower()))
             
             except Exception as e:
-                print(f"KeyRecorder error: {e}")
+                logger.exception("Errore listener tastiera: %s", e)
 
         def on_release(key):
             if not self._recording:
@@ -420,6 +486,24 @@ class KeyRecorder(tk.Toplevel):
         self._listener = pk.Listener(on_press=on_press, on_release=on_release)
         self._listener.daemon = True
         self._listener.start()
+
+    def _poll_listener_events(self):
+        """Consuma gli eventi del listener nel thread Tk principale."""
+        try:
+            while True:
+                event, value = self._listener_events.get_nowait()
+                if event == "add":
+                    self._add_key(value)
+                elif event == "ok":
+                    self._ok()
+                elif event == "cancel":
+                    self._cancel()
+        except queue.Empty:
+            pass
+        except Exception as e:
+            logger.exception("Errore dispatcher KeyRecorder: %s", e)
+        if not self._closed:
+            self.after(30, self._poll_listener_events)
 
     def _add_key(self, name):
         if not name:
@@ -430,7 +514,7 @@ class KeyRecorder(tk.Toplevel):
             self.keys.insert(0, name)
         else:
             self.keys.append(name)
-        self.after(0, self._update_display)
+        self._update_display()
 
     def _update_display(self):
         if self.keys:
@@ -455,11 +539,15 @@ class KeyRecorder(tk.Toplevel):
         self._close()
 
     def _close(self):
+        self._closed = True
         try:
             if self._listener is not None:
                 self._listener.stop()
-        except:
-            pass
+                self._listener.join(timeout=1.0)
+                if self._listener.is_alive():
+                    logger.warning("Listener tastiera non terminato entro il timeout")
+        except Exception as e:
+            logger.exception("Errore arresto listener tastiera: %s", e)
         self.destroy()
 
     @classmethod
@@ -472,16 +560,25 @@ class KeyRecorder(tk.Toplevel):
 class App:
     def __init__(self, root):
         self.root = root
+        self._main_thread_id = threading.get_ident()
         self.root.title("SkipeDeck - Akai MPD218 Controller")
         self.root.geometry("1100x620")
         self.root.configure(bg="#111")
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+        self.start_minimized = False
+        self.launch_at_startup = False
         self.cfg = {}
         self.note_map = dict(DEFAULT_NOTES)
         self.selected = None
         self.learn = False
         self.running = False
+        self._closing = False
+        self._ui_events = queue.Queue()
+        self._midi_stop = None
+        self._midi_initialized = False
         self.midi_thread = None
+        self._tray_thread = None
+        self._tray_icon = None
         self.last_trig = {}
         self.knob_vals = {}
         self.knob_btns = {}
@@ -523,8 +620,89 @@ class App:
         self._load_profiles()
         self._load_knob_cc_map()
         self._ui()
+        self.root.after(25, self._drain_ui_events)
         self._start_midi()
-        self._tray_icon = None
+        if START_IN_TRAY or self.start_minimized:
+            if TRAY_OK:
+                self.root.after_idle(self._minimize_to_tray)
+            else:
+                self._log("Avvio nella tray richiesto ma pystray non è disponibile.")
+
+    def _post_ui(self, callback, *args):
+        """Accoda un'azione Tk: è sicuro chiamarlo dai thread worker/tray."""
+        if not self._closing:
+            self._ui_events.put((callback, args))
+
+    def _drain_ui_events(self):
+        """Esegue nel main thread le operazioni inviate dai thread ausiliari."""
+        if self._closing:
+            return
+        try:
+            while True:
+                callback, args = self._ui_events.get_nowait()
+                callback(*args)
+        except queue.Empty:
+            pass
+        except Exception as e:
+            logger.exception("Errore nel dispatcher UI: %s", e)
+        if not self._closing:
+            self.root.after(25, self._drain_ui_events)
+
+    def _open_startup_settings(self):
+        """Mostra le preferenze di avvio nello stile dell'app."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Preferenze di avvio")
+        dialog.configure(bg="#1c1c24")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        start_var = tk.BooleanVar(value=self.launch_at_startup)
+        mode_var = tk.StringVar(value="tray" if self.start_minimized else "window")
+        tk.Label(dialog, text="Preferenze di avvio", fg="white", bg="#1c1c24",
+                 font=("Helvetica", 12, "bold")).pack(anchor="w", padx=18, pady=(16, 10))
+        startup = tk.Checkbutton(dialog, text="Avvia con Windows", variable=start_var,
+                                 fg="white", bg="#1c1c24", selectcolor="#333",
+                                 activebackground="#1c1c24", activeforeground="white",
+                                 state=("normal" if sys.platform == "win32" else "disabled"))
+        startup.pack(anchor="w", padx=18, pady=3)
+        tk.Label(dialog, text="Modalità di avvio:", fg="#aaa", bg="#1c1c24").pack(
+            anchor="w", padx=18, pady=(10, 2))
+        for text, value in (("Mostra la finestra", "window"),
+                            ("Avvia direttamente nella tray", "tray")):
+            tk.Radiobutton(dialog, text=text, variable=mode_var, value=value,
+                           fg="white", bg="#1c1c24", selectcolor="#333",
+                           activebackground="#1c1c24", activeforeground="white").pack(
+                               anchor="w", padx=28, pady=2)
+        if sys.platform != "win32":
+            tk.Label(dialog, text="L'avvio automatico è disponibile solo su Windows.",
+                     fg="#888", bg="#1c1c24", font=("Helvetica", 8)).pack(
+                         anchor="w", padx=18, pady=(6, 0))
+        buttons = tk.Frame(dialog, bg="#1c1c24")
+        buttons.pack(fill="x", padx=18, pady=16)
+        def apply():
+            old_startup, old_tray = self.launch_at_startup, self.start_minimized
+            self.launch_at_startup = bool(start_var.get())
+            self.start_minimized = (mode_var.get() == "tray")
+            try:
+                if sys.platform == "win32":
+                    _set_startup_registration(self.launch_at_startup, self.start_minimized)
+                self._save_profiles()
+            except Exception as exc:
+                logger.exception("Errore salvataggio preferenze di avvio: %s", exc)
+                self.launch_at_startup, self.start_minimized = old_startup, old_tray
+                messagebox.showerror("Errore preferenze",
+                                     f"Impossibile aggiornare le preferenze di avvio:\n{exc}",
+                                     parent=dialog)
+                return
+            if sys.platform == "win32" and self.launch_at_startup:
+                self._log("Avvio con Windows attivato; comando Run aggiornato.")
+            elif sys.platform == "win32":
+                self._log("Avvio con Windows disattivato.")
+            dialog.destroy()
+        tk.Button(buttons, text="Annulla", command=dialog.destroy, bg="#333", fg="#aaa",
+                  bd=0, padx=12, pady=5).pack(side="right", padx=(6, 0))
+        tk.Button(buttons, text="Salva", command=apply, bg="#2a6eba", fg="white",
+                  bd=0, padx=14, pady=5).pack(side="right")
 
     def _on_closing(self):
         """Quando si preme X: chiede se minimizzare nella tray o chiudere."""
@@ -596,19 +774,19 @@ class App:
             draw = ImageDraw.Draw(img)
             draw.ellipse([4, 4, size - 4, size - 4], fill="#2a6eba")
             draw.text((size // 2 - 8, size // 2 - 8), "SD", fill="white")
-        except Exception:
+        except Exception as e:
+            logger.exception("Errore creazione icona tray: %s", e)
             img = Image.new("RGB", (size, size), "#2a6eba")
 
         def _show(icon, item):
             icon.stop()
             self._tray_icon = None
-            self.root.after(0, self.root.deiconify)
-            self.root.after(0, self.root.lift)
+            self._post_ui(self._restore_from_tray)
 
         def _quit(icon, item):
             icon.stop()
             self._tray_icon = None
-            self.root.after(0, self._quit_app)
+            self._post_ui(self._quit_app)
 
         menu = pystray.Menu(
             pystray.MenuItem("▶  Mostra SkipeDeck", _show, default=True),
@@ -616,21 +794,56 @@ class App:
             pystray.MenuItem("✕  Esci", _quit),
         )
         self._tray_icon = pystray.Icon("SkipeDeck", img, "SkipeDeck", menu)
-        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        self._tray_thread = threading.Thread(target=self._run_tray, name="tray", daemon=True)
+        self._tray_thread.start()
         self._log("🔽 Minimizzato nella system tray — doppio clic sull'icona per riaprire")
 
+    def _run_tray(self):
+        try:
+            self._tray_icon.run()
+        except Exception as e:
+            logger.exception("Errore thread tray: %s", e)
+            self._post_ui(self._restore_from_tray)
+
+    def _restore_from_tray(self):
+        if self._closing:
+            return
+        self.root.deiconify()
+        self.root.lift()
+
     def _quit_app(self):
-        """Chiusura pulita dell'applicazione."""
-        if self._tray_icon:
-            try:
-                self._tray_icon.stop()
-            except Exception:
-                pass
+        """Arresta risorse e thread; distrugge sempre la finestra."""
+        if self._closing:
+            return
+        self._closing = True
         self.running = False
-        if self.midi_thread and self.midi_thread.is_alive():
-            self.midi_thread.join(timeout=0.2)
-        self._save_profiles()
-        self.root.destroy()
+        if self._midi_stop is not None:
+            self._midi_stop.set()
+        try:
+            if self._tray_icon is not None:
+                self._tray_icon.stop()
+        except Exception as e:
+            logger.exception("Errore arresto icona tray: %s", e)
+        try:
+            if self.midi_thread and self.midi_thread.is_alive() and threading.current_thread() is not self.midi_thread:
+                self.midi_thread.join(timeout=2.0)
+                if self.midi_thread.is_alive():
+                    logger.warning("Thread MIDI non terminato entro il timeout")
+            if self._tray_thread and self._tray_thread.is_alive() and threading.current_thread() is not self._tray_thread:
+                self._tray_thread.join(timeout=2.0)
+                if self._tray_thread.is_alive():
+                    logger.warning("Thread tray non terminato entro il timeout")
+        except Exception as e:
+            logger.exception("Errore attendendo i thread: %s", e)
+        try:
+            self._save_profiles()
+        except Exception as e:
+            logger.exception("Errore salvataggio profili in chiusura: %s", e)
+        finally:
+            try:
+                self.root.destroy()
+            except Exception as e:
+                logger.exception("Errore distruzione finestra Tk: %s", e)
 
     def _load_profiles(self):
         global PROFILES_FILE
@@ -639,6 +852,9 @@ class App:
                 data = json.loads(PROFILES_FILE.read_text())
                 self.profiles = data.get("profiles", {"inverted": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}, "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}}})
                 self.profile_assignments = data.get("assignments", {})
+                preferences = data.get("preferences", {})
+                self.start_minimized = bool(preferences.get("start_minimized", False))
+                self.launch_at_startup = bool(preferences.get("launch_at_startup", False))
                 self.current_profile = data.get("current", "inverted")
                 if self.current_profile in self.profiles:
                     profile_data = self.profiles[self.current_profile]
@@ -646,6 +862,7 @@ class App:
                     self.note_map = {int(k): v for k, v in note_map_raw.items()} if note_map_raw else dict(DEFAULT_NOTES)
                     self.cfg = profile_data.get("cfg", {})
             except Exception as e:
+                logger.exception("Errore caricamento profili: %s", e)
                 self._log(f"Errore caricamento profili: {e}")
                 self.profiles = {"inverted": {"note_map": {str(k): v for k, v in DEFAULT_NOTES.items()}, "cfg": {}, "knob_cc_map": {str(cc): k for cc, k in KNOB_CCS_DEFAULT.items()}}}
                 self.current_profile = "inverted"
@@ -677,9 +894,36 @@ class App:
         data = {
             "profiles": self.profiles,
             "assignments": self.profile_assignments,
-            "current": self.current_profile
+            "current": self.current_profile,
+            "preferences": {
+                "start_minimized": self.start_minimized,
+                "launch_at_startup": self.launch_at_startup
+            }
         }
-        PROFILES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        payload = json.dumps(data, indent=2, ensure_ascii=False)
+        try:
+            self._atomic_write_text(PROFILES_FILE, payload)
+        except OSError as e:
+            if PROFILES_FILE == USER_PROFILES_FILE:
+                raise
+            logger.warning("Profili non scrivibili accanto allo script; uso cartella utente: %s", e)
+            PROFILES_FILE = USER_PROFILES_FILE
+            self._atomic_write_text(PROFILES_FILE, payload)
+
+    @staticmethod
+    def _atomic_write_text(path, text):
+        """Scrive in modo atomico e crea le cartelle di configurazione necessarie."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        try:
+            temporary.write_text(text, encoding="utf-8")
+            os.replace(temporary, path)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as e:
+                logger.exception("Impossibile rimuovere file temporaneo %s: %s", temporary, e)
 
     def _switch_profile(self, profile_name):
         if profile_name not in self.profiles:
@@ -792,6 +1036,7 @@ class App:
             self.canvas.delete("all")
             self.canvas.create_image(0, 0, anchor="nw", image=self.tk_img)
         except Exception as e:
+            logger.exception("Errore caricamento immagine modello: %s", e)
             self._log(f"Errore caricamento immagine: {e}")
         
         self._refresh_all_assignments()
@@ -809,6 +1054,8 @@ class App:
         self._slbl.pack(side="left")
         self._cal_ind = tk.Label(sb, text="", fg="#ff9800", bg="#1a1a2e", font=("Helvetica",9,"bold"))
         self._cal_ind.pack(side="left", padx=10)
+        tk.Button(sb, text="⚙ Avvio", command=self._open_startup_settings,
+                  bg="#333", fg="white", bd=0, padx=9, pady=3).pack(side="right", padx=6)
         self._profile_lbl = tk.Label(sb, text=f"Profilo: {self.current_profile}", fg="#4a90d9", bg="#1a1a2e", font=("Helvetica",9,"bold"))
         self._profile_lbl.pack(side="left", padx=15)
         
@@ -864,6 +1111,7 @@ class App:
             self.tk_img = ImageTk.PhotoImage(img)
             self.canvas.create_image(0, 0, anchor="nw", image=self.tk_img)
         except Exception as e:
+            logger.exception("Errore caricamento immagine iniziale: %s", e)
             self.canvas.create_text(275, 225, text=f"Errore immagine:\n{e}", fill="white")
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
@@ -1270,42 +1518,79 @@ class App:
                 self._learn_btn.config(text="In ascolto... Ruota la MANOPOLA fisica", bg="#c0392b")
 
     def _start_midi(self):
-        if not MIDI_OK:
+        if not MIDI_OK or self._closing:
             return
-        pmidi.init()
-        devs = []
-        for i in range(pmidi.get_count()):
-            info = pmidi.get_device_info(i)
-            if info[2]:
-                devs.append(info[1].decode("utf-8", "replace"))
-        self._dcb["values"] = devs
-        if devs:
-            pref = [n for n in devs if "MPD" in n.upper() or "AKAI" in n.upper()]
-            self._dev.set(pref[0] if pref else devs[0])
-            self._connect_device()
+        try:
+            if not self._midi_initialized:
+                pmidi.init()
+                self._midi_initialized = True
+            devs = []
+            for i in range(pmidi.get_count()):
+                info = pmidi.get_device_info(i)
+                if info[2]:
+                    devs.append(info[1].decode("utf-8", "replace"))
+            self._dcb["values"] = devs
+            if devs:
+                pref = [n for n in devs if "MPD" in n.upper() or "AKAI" in n.upper()]
+                self._dev.set(pref[0] if pref else devs[0])
+                self._connect_device()
+            else:
+                self._status(False, "Nessun dispositivo MIDI disponibile")
+        except Exception as e:
+            logger.exception("Errore inizializzazione/ricerca dispositivi MIDI: %s", e)
+            self._status(False, f"Errore MIDI: {e}")
 
     def _connect_device(self):
-        name = self._dev.get()
-        for i in range(pmidi.get_count()):
-            info = pmidi.get_device_info(i)
-            if info[2] and info[1].decode("utf-8", "replace") == name:
-                self.running = False
-                self.running = True
-                self.midi_thread = threading.Thread(target=self._midi_loop, args=(i, name), daemon=True)
-                self.midi_thread.start()
+        if self._closing:
+            return
+        try:
+            # Ferma e attende sempre la sessione precedente prima di crearne una nuova.
+            if self._midi_stop is not None:
+                self._midi_stop.set()
+            if self.midi_thread and self.midi_thread.is_alive():
+                self.midi_thread.join(timeout=2.0)
+                if self.midi_thread.is_alive():
+                    logger.warning("Reconnect annullato: worker MIDI precedente ancora attivo")
+                    self._status(False, "Attesa chiusura connessione MIDI precedente")
+                    return
+            name = self._dev.get()
+            for i in range(pmidi.get_count()):
+                info = pmidi.get_device_info(i)
+                if info[2] and info[1].decode("utf-8", "replace") == name:
+                    stop_event = threading.Event()
+                    self._midi_stop = stop_event
+                    self.running = True
+                    self.midi_thread = threading.Thread(
+                        target=self._midi_loop, args=(i, name, stop_event),
+                        name="midi-input", daemon=True)
+                    self.midi_thread.start()
+                    return
+            self._status(False, "Dispositivo MIDI non trovato")
+        except Exception as e:
+            logger.exception("Errore connessione dispositivo MIDI: %s", e)
+            self._status(False, f"Errore MIDI: {e}")
 
-    def _midi_loop(self, dev_id, dev_name):
+    def _midi_loop(self, dev_id, dev_name, stop_event):
+        port = None
         try:
             port = pmidi.Input(dev_id)
-            self.root.after(0, lambda: self._status(True, f"Connesso a: {dev_name}"))
-            while self.running:
+            self._post_ui(self._status, True, f"Connesso a: {dev_name}")
+            while not stop_event.is_set():
                 if port.poll():
                     for ev in port.read(64):
-                        self.root.after(0, lambda e=ev: self._handle_safe_midi(e))
-                time.sleep(0.001)
-            port.close()
+                        self._post_ui(self._handle_safe_midi, ev)
+                stop_event.wait(0.005)
         except Exception as e:
-            self.root.after(0, lambda: self._status(False, f"Errore: {e}"))
+            logger.exception("Errore worker MIDI per %s: %s", dev_name, e)
+            self._post_ui(self._status, False, f"Errore: {e}")
+        finally:
+            if port is not None:
+                try:
+                    port.close()
+                except Exception as e:
+                    logger.exception("Errore chiusura porta MIDI %s: %s", dev_name, e)
+            if self._midi_stop is stop_event:
+                self.running = False
 
     def _handle_safe_midi(self, ev):
         status, d1, d2 = ev[0][0] & 0xF0, ev[0][1], ev[0][2]
@@ -1379,6 +1664,7 @@ class App:
             elif action == "Spotify: precedente":
                 _press_media("prevtrack")
         except Exception as e:
+            logger.exception("Errore esecuzione azione: %s", e)
             self._log(f"Errore: {e}")
 
     def _exec_knob_click(self, key):
@@ -1400,6 +1686,7 @@ class App:
             elif action == "Spotify: precedente":
                 _press_media("prevtrack")
         except Exception as e:
+            logger.exception("Errore esecuzione azione: %s", e)
             self._log(f"Errore: {e}")
 
     def _exec_knob(self, key, delta, repeats):
@@ -1414,6 +1701,7 @@ class App:
             elif action == "Trimmer: Scorrimento Pagine":
                 _press_hotkey("down" if delta > 0 else "up", repeats)
         except Exception as e:
+            logger.exception("Errore esecuzione azione: %s", e)
             self._log(f"Errore: {e}")
 
     def _status(self, ok, text):
@@ -1421,6 +1709,12 @@ class App:
         self._slbl.config(text=text)
 
     def _log(self, msg):
+        if threading.get_ident() != self._main_thread_id:
+            self._post_ui(self._log, msg)
+            return
+        if self._closing or not hasattr(self, "_log_w"):
+            logger.info("%s", msg)
+            return
         self._log_w.config(state="normal")
         self._log_w.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
         self._log_w.see("end")
@@ -1463,6 +1757,7 @@ class App:
             self._save_profiles()
             self._log("Configurazione importata.")
         except Exception as e:
+            logger.exception("Errore importazione configurazione: %s", e)
             messagebox.showerror("Errore", str(e))
 
     def _export(self):
@@ -1484,10 +1779,29 @@ if __name__ == "__main__":
                              "Installa pygame:\n\npython -m pip install pygame pyautogui pillow pynput")
         sys.exit(1)
     import pygame
-    pygame.init()
-    pmidi.init()
     root = tk.Tk()
-    app = App(root)
-    root.mainloop()
-    pmidi.quit()
-    pygame.quit()
+    app = None
+    try:
+        pygame.init()
+        app = App(root)
+        root.mainloop()
+    except Exception as e:
+        logger.exception("Errore non gestito nell'applicazione: %s", e)
+        raise
+    finally:
+        if app is not None and not app._closing:
+            app._quit_app()
+        elif app is None:
+            try:
+                root.destroy()
+            except Exception as e:
+                logger.exception("Errore distruzione root durante startup fallito: %s", e)
+        try:
+            if MIDI_OK:
+                pmidi.quit()
+        except Exception as e:
+            logger.exception("Errore chiusura pygame.midi: %s", e)
+        try:
+            pygame.quit()
+        except Exception as e:
+            logger.exception("Errore chiusura pygame: %s", e)
